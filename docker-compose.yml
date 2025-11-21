@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  nexus-app:
+    container_name: nexus-cloud-manager
+    build: .
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      # Coloque sua chave API do Gemini aqui se quiser usar a IA no servidor
+      - API_KEY=${API_KEY}
+    volumes:
+      # Persistência opcional para logs ou uploads futuros
+      - ./logs:/app/logs
+    networks:
+      - nexus-net
+
+networks:
+  nexus-net:
+    driver: bridge

@@ -1,0 +1,7 @@
+{
+  "name": "NexusCloud Manager",
+  "description": "Um gerenciador de arquivos unificado e inteligente para servidores remotos e nuvem, impulsionado por IA Gemini.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
