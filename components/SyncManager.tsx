@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Activity, Clock, ArrowRight, Play, Pause, Settings, Plus, X, Calendar, Filter, RefreshCw, Database, CheckCircle, AlertCircle, ClipboardList, AlertTriangle } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Activity, Clock, ArrowRight, Play, Pause, Settings, Plus, X, Calendar, Filter, RefreshCw, Database, CheckCircle, AlertCircle, ClipboardList, AlertTriangle, Loader2 } from 'lucide-react';
 import { SyncJob, Connection, SyncLogEntry } from '../types';
 
 interface SyncManagerProps {
@@ -10,6 +10,8 @@ const SyncManager: React.FC<SyncManagerProps> = ({ connections = [] }) => {
   const [activeTab, setActiveTab] = useState<'jobs' | 'history'>('jobs');
   const [jobs, setJobs] = useState<SyncJob[]>([]);
   const [logs, setLogs] = useState<SyncLogEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   
   // Form State
@@ -21,30 +23,85 @@ const SyncManager: React.FC<SyncManagerProps> = ({ connections = [] }) => {
   const [patterns, setPatterns] = useState('*.tmp, .DS_Store');
   const [syncType, setSyncType] = useState<'one-way' | 'two-way'>('one-way');
 
+  const token = localStorage.getItem('token');
+
+  // Fetch jobs and logs from API
+  const fetchData = useCallback(async () => {
+    if (!token) return;
+    
+    try {
+      setLoading(true);
+      const [jobsRes, logsRes] = await Promise.all([
+        fetch('/api/sync/jobs', { headers: { Authorization: `Bearer ${token}` } }),
+        fetch('/api/sync/logs', { headers: { Authorization: `Bearer ${token}` } })
+      ]);
+
+      if (jobsRes.ok) {
+        const jobsData = await jobsRes.json();
+        setJobs(jobsData);
+      }
+      if (logsRes.ok) {
+        const logsData = await logsRes.json();
+        setLogs(logsData);
+      }
+      setError(null);
+    } catch (e) {
+      console.error('Error fetching sync data:', e);
+      setError('Erro ao carregar dados de sincronização');
+    } finally {
+      setLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    fetchData();
+    // Poll for updates every 5 seconds when jobs are running
+    const interval = setInterval(() => {
+      if (jobs.some(j => j.status === 'running')) {
+        fetchData();
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [fetchData, jobs]);
+
   // Fallback to look up connection details if connections prop isn't populated yet or for old jobs
   const getConnectionName = (id: string) => connections.find(c => c.id === id)?.name || 'Desconhecido';
   const getConnectionType = (id: string) => connections.find(c => c.id === id)?.type || '';
 
-  const handleCreateJob = () => {
-    const newJob: SyncJob = {
-      id: Date.now().toString(),
-      name: jobName || 'Nova Tarefa',
-      sourceId,
-      destinationId: destId,
-      type: syncType,
-      progress: 0,
-      status: 'idle',
-      filesProcessed: 0,
-      totalFiles: 0,
-      frequency: frequency as any,
-      scheduledTime: time,
-      excludePatterns: patterns.split(',').map(p => p.trim()),
-      nextRun: 'Aguardando agendamento'
-    };
+  const handleCreateJob = async () => {
+    if (!token) return;
 
-    setJobs([...jobs, newJob]);
-    setIsModalOpen(false);
-    resetForm();
+    try {
+      const res = await fetch('/api/sync/jobs', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: jobName || 'Nova Tarefa',
+          sourceId,
+          destinationId: destId,
+          type: syncType,
+          frequency,
+          scheduledTime: time,
+          excludePatterns: patterns.split(',').map(p => p.trim())
+        })
+      });
+
+      if (res.ok) {
+        const newJob = await res.json();
+        setJobs([...jobs, newJob]);
+        setIsModalOpen(false);
+        resetForm();
+      } else {
+        const err = await res.json();
+        alert(err.error || 'Erro ao criar tarefa');
+      }
+    } catch (e) {
+      console.error('Error creating job:', e);
+      alert('Erro ao criar tarefa');
+    }
   };
 
   const resetForm = () => {
@@ -56,18 +113,50 @@ const SyncManager: React.FC<SyncManagerProps> = ({ connections = [] }) => {
     setPatterns('*.tmp, .DS_Store');
   };
 
-  const toggleJobStatus = (id: string) => {
-    setJobs(jobs.map(job => {
-      if (job.id === id) {
-        if (job.status === 'running') return { ...job, status: 'idle', progress: 0 };
-        return { ...job, status: 'running', progress: 0 }; // Simulate start
+  const toggleJobStatus = async (id: string) => {
+    if (!token) return;
+    
+    const job = jobs.find(j => j.id === id);
+    if (!job) return;
+
+    try {
+      if (job.status === 'running') {
+        // Stop the job
+        await fetch(`/api/sync/jobs/${id}/stop`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        setJobs(jobs.map(j => j.id === id ? { ...j, status: 'idle', progress: 0 } : j));
+      } else {
+        // Start the job
+        const res = await fetch(`/api/sync/jobs/${id}/run`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          setJobs(jobs.map(j => j.id === id ? { ...j, status: 'running', progress: 0 } : j));
+        }
       }
-      return job;
-    }));
+    } catch (e) {
+      console.error('Error toggling job status:', e);
+    }
   };
 
-  const deleteJob = (id: string) => {
-    setJobs(jobs.filter(j => j.id !== id));
+  const deleteJob = async (id: string) => {
+    if (!token) return;
+
+    try {
+      const res = await fetch(`/api/sync/jobs/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (res.ok) {
+        setJobs(jobs.filter(j => j.id !== id));
+      }
+    } catch (e) {
+      console.error('Error deleting job:', e);
+    }
   };
 
   const getStatusColor = (status: string) => {
@@ -92,10 +181,24 @@ const SyncManager: React.FC<SyncManagerProps> = ({ connections = [] }) => {
     });
   };
 
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <Loader2 className="animate-spin text-primary-500" size={32} />
+        <span className="ml-3 text-slate-400">Carregando sincronizações...</span>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-full">
       {/* Header Area */}
       <div className="p-8 pb-0">
+        {error && (
+          <div className="mb-4 p-3 bg-red-500/20 border border-red-500/30 rounded-lg text-red-400 text-sm">
+            {error}
+          </div>
+        )}
         <div className="flex justify-between items-start mb-6">
           <div>
             <h2 className="text-2xl font-bold text-white flex items-center gap-3">

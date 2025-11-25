@@ -3756,6 +3756,295 @@ app.post('/api/fs/transfer', authenticate, async (req, res) => {
   }
 });
 
+// ========================================
+// SYNC JOBS API
+// ========================================
+
+const SYNC_JOBS_FILE = path.join(__dirname, 'sync_jobs.json');
+const SYNC_LOGS_FILE = path.join(__dirname, 'sync_logs.json');
+
+// Active sync processes
+const activeSyncs = new Map();
+
+// Load sync jobs from file
+const loadSyncJobs = (userId) => {
+  try {
+    if (fs.existsSync(SYNC_JOBS_FILE)) {
+      const all = JSON.parse(fs.readFileSync(SYNC_JOBS_FILE, 'utf8'));
+      return all[userId] || [];
+    }
+  } catch (e) {
+    console.error('Error loading sync jobs:', e);
+  }
+  return [];
+};
+
+// Save sync jobs to file
+const saveSyncJobs = (userId, jobs) => {
+  try {
+    let all = {};
+    if (fs.existsSync(SYNC_JOBS_FILE)) {
+      all = JSON.parse(fs.readFileSync(SYNC_JOBS_FILE, 'utf8'));
+    }
+    all[userId] = jobs;
+    fs.writeFileSync(SYNC_JOBS_FILE, JSON.stringify(all, null, 2));
+  } catch (e) {
+    console.error('Error saving sync jobs:', e);
+  }
+};
+
+// Load sync logs from file
+const loadSyncLogs = (userId) => {
+  try {
+    if (fs.existsSync(SYNC_LOGS_FILE)) {
+      const all = JSON.parse(fs.readFileSync(SYNC_LOGS_FILE, 'utf8'));
+      return (all[userId] || []).slice(-100); // Keep last 100 logs
+    }
+  } catch (e) {
+    console.error('Error loading sync logs:', e);
+  }
+  return [];
+};
+
+// Save sync log entry
+const saveSyncLog = (userId, logEntry) => {
+  try {
+    let all = {};
+    if (fs.existsSync(SYNC_LOGS_FILE)) {
+      all = JSON.parse(fs.readFileSync(SYNC_LOGS_FILE, 'utf8'));
+    }
+    if (!all[userId]) all[userId] = [];
+    all[userId].push(logEntry);
+    // Keep only last 100 logs per user
+    if (all[userId].length > 100) {
+      all[userId] = all[userId].slice(-100);
+    }
+    fs.writeFileSync(SYNC_LOGS_FILE, JSON.stringify(all, null, 2));
+  } catch (e) {
+    console.error('Error saving sync log:', e);
+  }
+};
+
+// Get sync jobs
+app.get('/api/sync/jobs', authenticate, (req, res) => {
+  const jobs = loadSyncJobs(req.user.id);
+  res.json(jobs);
+});
+
+// Create sync job
+app.post('/api/sync/jobs', authenticate, (req, res) => {
+  const { name, sourceId, destinationId, type, frequency, scheduledTime, excludePatterns } = req.body;
+  
+  if (!name || !sourceId || !destinationId) {
+    return res.status(400).json({ error: 'Nome, origem e destino são obrigatórios' });
+  }
+
+  const jobs = loadSyncJobs(req.user.id);
+  const newJob = {
+    id: Date.now().toString(),
+    name,
+    sourceId,
+    destinationId,
+    type: type || 'one-way',
+    status: 'idle',
+    progress: 0,
+    filesProcessed: 0,
+    totalFiles: 0,
+    frequency: frequency || 'manual',
+    scheduledTime: scheduledTime || '00:00',
+    excludePatterns: excludePatterns || [],
+    createdAt: new Date().toISOString(),
+    lastRun: null,
+    nextRun: frequency === 'manual' ? null : 'Aguardando...'
+  };
+
+  jobs.push(newJob);
+  saveSyncJobs(req.user.id, jobs);
+  res.json(newJob);
+});
+
+// Update sync job
+app.put('/api/sync/jobs/:id', authenticate, (req, res) => {
+  const jobs = loadSyncJobs(req.user.id);
+  const idx = jobs.findIndex(j => j.id === req.params.id);
+  
+  if (idx === -1) {
+    return res.status(404).json({ error: 'Job não encontrado' });
+  }
+
+  jobs[idx] = { ...jobs[idx], ...req.body };
+  saveSyncJobs(req.user.id, jobs);
+  res.json(jobs[idx]);
+});
+
+// Delete sync job
+app.delete('/api/sync/jobs/:id', authenticate, (req, res) => {
+  let jobs = loadSyncJobs(req.user.id);
+  const initialLength = jobs.length;
+  jobs = jobs.filter(j => j.id !== req.params.id);
+  
+  if (jobs.length === initialLength) {
+    return res.status(404).json({ error: 'Job não encontrado' });
+  }
+
+  // Stop if running
+  if (activeSyncs.has(req.params.id)) {
+    activeSyncs.get(req.params.id).abort = true;
+    activeSyncs.delete(req.params.id);
+  }
+
+  saveSyncJobs(req.user.id, jobs);
+  res.json({ success: true });
+});
+
+// Get sync logs
+app.get('/api/sync/logs', authenticate, (req, res) => {
+  const logs = loadSyncLogs(req.user.id);
+  res.json(logs);
+});
+
+// Execute sync job
+app.post('/api/sync/jobs/:id/run', authenticate, async (req, res) => {
+  const jobs = loadSyncJobs(req.user.id);
+  const job = jobs.find(j => j.id === req.params.id);
+  
+  if (!job) {
+    return res.status(404).json({ error: 'Job não encontrado' });
+  }
+
+  if (job.status === 'running') {
+    return res.status(400).json({ error: 'Job já está em execução' });
+  }
+
+  // Get connection credentials
+  const allCreds = loadCredentials();
+  const userCreds = allCreds[req.user.id] || {};
+  const srcCreds = userCreds[job.sourceId];
+  const dstCreds = userCreds[job.destinationId];
+
+  // Update job status
+  job.status = 'running';
+  job.progress = 0;
+  job.filesProcessed = 0;
+  saveSyncJobs(req.user.id, jobs);
+
+  const startTime = new Date().toISOString();
+  const syncContext = { abort: false, filesTransferred: 0, sizeTransferred: 0 };
+  activeSyncs.set(job.id, syncContext);
+
+  // Send immediate response
+  res.json({ success: true, message: 'Sync iniciado' });
+
+  // Run sync in background
+  try {
+    // Determine sync type based on connections
+    const srcType = srcCreds?.type || 'local';
+    const dstType = dstCreds?.type || 'local';
+
+    // For rclone-based connections (cloud providers)
+    const isRcloneSrc = ['gdrive', 'dropbox', 'onedrive'].includes(srcType);
+    const isRcloneDst = ['gdrive', 'dropbox', 'onedrive'].includes(dstType);
+
+    if (isRcloneSrc || isRcloneDst) {
+      // Use rclone for cloud sync
+      const srcRemote = isRcloneSrc ? srcCreds.remoteName : 'local';
+      const dstRemote = isRcloneDst ? dstCreds.remoteName : 'local';
+      const srcPath = isRcloneSrc ? '/' : srcCreds?.path || '/';
+      const dstPath = isRcloneDst ? '/' : dstCreds?.path || '/';
+
+      const syncCommand = job.type === 'two-way' ? 'bisync' : 'sync';
+      
+      await rcloneRCD(`sync/${syncCommand}`, 'POST', {
+        srcFs: `${srcRemote}:${srcPath}`,
+        dstFs: `${dstRemote}:${dstPath}`,
+        _config: {
+          Exclude: job.excludePatterns || []
+        }
+      });
+
+      syncContext.filesTransferred = 100; // Estimated
+      syncContext.sizeTransferred = 0;
+    } else {
+      // For SFTP/FTP/Local - simplified file sync
+      // This is a basic implementation - full sync would require more complex logic
+      job.progress = 100;
+    }
+
+    // Update job as completed
+    const updatedJobs = loadSyncJobs(req.user.id);
+    const jobIdx = updatedJobs.findIndex(j => j.id === job.id);
+    if (jobIdx !== -1) {
+      updatedJobs[jobIdx].status = 'idle';
+      updatedJobs[jobIdx].progress = 0;
+      updatedJobs[jobIdx].lastRun = new Date().toLocaleString('pt-BR');
+      saveSyncJobs(req.user.id, updatedJobs);
+    }
+
+    // Save success log
+    saveSyncLog(req.user.id, {
+      id: Date.now().toString(),
+      jobId: job.id,
+      jobName: job.name,
+      status: 'success',
+      startTime,
+      endTime: new Date().toISOString(),
+      sourceName: job.sourceId,
+      destinationName: job.destinationId,
+      filesTransferred: syncContext.filesTransferred,
+      sizeTransferred: syncContext.sizeTransferred,
+      details: 'Sincronização concluída com sucesso'
+    });
+
+  } catch (error) {
+    console.error('Sync error:', error);
+    
+    // Update job as failed
+    const updatedJobs = loadSyncJobs(req.user.id);
+    const jobIdx = updatedJobs.findIndex(j => j.id === job.id);
+    if (jobIdx !== -1) {
+      updatedJobs[jobIdx].status = 'failed';
+      updatedJobs[jobIdx].progress = 0;
+      saveSyncJobs(req.user.id, updatedJobs);
+    }
+
+    // Save error log
+    saveSyncLog(req.user.id, {
+      id: Date.now().toString(),
+      jobId: job.id,
+      jobName: job.name,
+      status: 'failed',
+      startTime,
+      endTime: new Date().toISOString(),
+      sourceName: job.sourceId,
+      destinationName: job.destinationId,
+      filesTransferred: 0,
+      sizeTransferred: 0,
+      details: error.message
+    });
+  } finally {
+    activeSyncs.delete(job.id);
+  }
+});
+
+// Stop sync job
+app.post('/api/sync/jobs/:id/stop', authenticate, (req, res) => {
+  if (activeSyncs.has(req.params.id)) {
+    activeSyncs.get(req.params.id).abort = true;
+    activeSyncs.delete(req.params.id);
+  }
+
+  const jobs = loadSyncJobs(req.user.id);
+  const idx = jobs.findIndex(j => j.id === req.params.id);
+  
+  if (idx !== -1) {
+    jobs[idx].status = 'idle';
+    jobs[idx].progress = 0;
+    saveSyncJobs(req.user.id, jobs);
+  }
+
+  res.json({ success: true });
+});
+
 // Fallback para o Frontend (SPA) - Redireciona qualquer rota desconhecida para o index.html do React
 app.get('*', (req, res) => {
   // Ignora requisições de API

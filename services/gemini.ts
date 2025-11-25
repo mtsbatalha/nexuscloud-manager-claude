@@ -104,17 +104,8 @@ export const suggestOrganization = async (files: FileItem[]): Promise<string> =>
 
 export const detectDuplicatesWithAI = async (files: FileItem[]): Promise<DuplicateCandidate[]> => {
   if (!groq) {
-    console.warn("Sem API Key. Retornando mocks de duplicatas.");
-    const mockItems = [
-      {
-        fileA: files.find(f => f.name.includes('logo')) || files[0],
-        fileB: files.find(f => f.name.includes('FINAL')) || files[1],
-        similarity: 98,
-        reason: "Tamanho de arquivo idêntico e nome semanticamente similar.",
-        suggestion: 'keep_b' as DuplicateCandidate['suggestion']
-      }
-    ];
-    return mockItems.filter((d): d is DuplicateCandidate => !!(d.fileA && d.fileB));
+    console.warn("Sem API Key. Configure VITE_GROQ_API_KEY para detecção de duplicatas com IA.");
+    return [];
   }
 
   const fileData = files
