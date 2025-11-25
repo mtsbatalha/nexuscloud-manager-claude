@@ -30,14 +30,16 @@ const AppContent: React.FC = () => {
 
   // Set up navigation callback for transfer progress
   useEffect(() => {
-    setOnNavigate((connId: string, path: string) => {
+    const handleNavigate = useCallback((connId: string, path: string) => {
       const conn = connections.find(c => c.id === connId);
       if (conn) {
         setActiveConnection(conn);
         setActiveView('files');
         setNavigateToPath(path);
       }
-    });
+    }, [connections]);
+
+    setOnNavigate(handleNavigate);
   }, [connections, setOnNavigate]);
 
   // Helper to check if token is expired
