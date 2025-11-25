@@ -28,19 +28,20 @@ const AppContent: React.FC = () => {
 
   const { setOnNavigate } = useTransfer();
 
+  // Memoize navigation callback to prevent infinite loops
+  const handleNavigate = useCallback((connId: string, path: string) => {
+    const conn = connections.find(c => c.id === connId);
+    if (conn) {
+      setActiveConnection(conn);
+      setActiveView('files');
+      setNavigateToPath(path);
+    }
+  }, [connections]);
+
   // Set up navigation callback for transfer progress
   useEffect(() => {
-    const handleNavigate = useCallback((connId: string, path: string) => {
-      const conn = connections.find(c => c.id === connId);
-      if (conn) {
-        setActiveConnection(conn);
-        setActiveView('files');
-        setNavigateToPath(path);
-      }
-    }, [connections]);
-
     setOnNavigate(handleNavigate);
-  }, [connections, setOnNavigate]);
+  }, [handleNavigate, setOnNavigate]);
 
   // Helper to check if token is expired
   const isTokenExpired = (token: string): boolean => {
