@@ -13,6 +13,14 @@ const SyncManager: React.FC<SyncManagerProps> = ({ connections = [] }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+
+  // Debug: log incoming connections and modal state to help diagnose empty dropdowns
+  useEffect(() => {
+    try {
+      console.debug('[SyncManager] connections count:', connections.length, 'names:', connections.map(c => c.name));
+      console.debug('[SyncManager] modal open:', isModalOpen);
+    } catch (e) {}
+  }, [connections, isModalOpen]);
   
   // Form State
   const [jobName, setJobName] = useState('');
