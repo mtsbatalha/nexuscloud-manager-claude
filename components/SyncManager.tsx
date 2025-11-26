@@ -45,24 +45,34 @@ const SyncManager: React.FC<SyncManagerProps> = ({ connections = [] }) => {
         setLogs(logsData);
       }
       setError(null);
+      setLoading(false);
     } catch (e) {
       console.error('Error fetching sync data:', e);
       setError('Erro ao carregar dados de sincronização');
-    } finally {
       setLoading(false);
     }
   }, [token]);
 
   useEffect(() => {
     fetchData();
-    // Poll for updates every 5 seconds when jobs are running
-    const interval = setInterval(() => {
-      if (jobs.some(j => j.status === 'running')) {
-        fetchData();
+  }, [token]);
+
+  // Separate polling effect to avoid infinite loops
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      if (!token) return;
+      try {
+        const jobsRes = await fetch('/api/sync/jobs', { headers: { Authorization: `Bearer ${token}` } });
+        if (jobsRes.ok) {
+          const jobsData = await jobsRes.json();
+          setJobs(jobsData);
+        }
+      } catch (e) {
+        console.error('Error polling sync data:', e);
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [fetchData, jobs]);
+  }, [token]);
 
   // Fallback to look up connection details if connections prop isn't populated yet or for old jobs
   const getConnectionName = (id: string) => connections.find(c => c.id === id)?.name || 'Desconhecido';
@@ -243,8 +253,18 @@ const SyncManager: React.FC<SyncManagerProps> = ({ connections = [] }) => {
       {/* Content Area */}
       <div className="p-8 pt-6 flex-1 overflow-y-auto">
         
+        {/* Loading State */}
+        {loading && jobs.length === 0 && (
+          <div className="flex items-center justify-center h-64">
+            <div className="text-center">
+              <Loader2 className="animate-spin mx-auto mb-4 text-primary-500" size={32} />
+              <p className="text-slate-400">Carregando sincronizações...</p>
+            </div>
+          </div>
+        )}
+
         {/* JOBS VIEW */}
-        {activeTab === 'jobs' && (
+        {activeTab === 'jobs' && !loading && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {jobs.map((job) => (
               <div key={job.id} className="bg-slate-900 border border-slate-800 rounded-xl p-6 hover:border-slate-600 transition-all">
@@ -324,11 +344,17 @@ const SyncManager: React.FC<SyncManagerProps> = ({ connections = [] }) => {
                 )}
               </div>
             ))}
+            {jobs.length === 0 && !loading && (
+              <div className="text-center py-12 text-slate-500">
+                <Activity size={32} className="mx-auto mb-3 opacity-50" />
+                <p>Nenhuma tarefa de sincronização criada</p>
+              </div>
+            )}
           </div>
         )}
 
         {/* HISTORY VIEW */}
-        {activeTab === 'history' && (
+        {activeTab === 'history' && !loading && (
           <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
