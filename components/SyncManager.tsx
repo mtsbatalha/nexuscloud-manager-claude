@@ -253,7 +253,7 @@ const SyncManager: React.FC<SyncManagerProps> = ({ connections = [] }) => {
       {/* Content Area */}
       <div className="p-8 pt-6 flex-1 overflow-y-auto">
         
-        {/* Loading State */}
+        {/* Loading State - only on first load */}
         {loading && jobs.length === 0 && (
           <div className="flex items-center justify-center h-64">
             <div className="text-center">
@@ -264,7 +264,7 @@ const SyncManager: React.FC<SyncManagerProps> = ({ connections = [] }) => {
         )}
 
         {/* JOBS VIEW */}
-        {activeTab === 'jobs' && !loading && (
+        {activeTab === 'jobs' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {jobs.map((job) => (
               <div key={job.id} className="bg-slate-900 border border-slate-800 rounded-xl p-6 hover:border-slate-600 transition-all">
@@ -354,7 +354,7 @@ const SyncManager: React.FC<SyncManagerProps> = ({ connections = [] }) => {
         )}
 
         {/* HISTORY VIEW */}
-        {activeTab === 'history' && !loading && (
+        {activeTab === 'history' && (
           <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
