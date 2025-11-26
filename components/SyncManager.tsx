@@ -23,7 +23,7 @@ const SyncManager: React.FC<SyncManagerProps> = ({ connections = [] }) => {
   const [patterns, setPatterns] = useState('*.tmp, .DS_Store');
   const [syncType, setSyncType] = useState<'one-way' | 'two-way'>('one-way');
 
-  const token = localStorage.getItem('token');
+  const token = localStorage.getItem('nexus_token');
 
   // Fetch jobs and logs from API
   const fetchData = useCallback(async () => {
