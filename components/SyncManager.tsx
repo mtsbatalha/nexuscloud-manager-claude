@@ -17,10 +17,44 @@ const SyncManager: React.FC<SyncManagerProps> = ({ connections = [] }) => {
   // Debug: log incoming connections and modal state to help diagnose empty dropdowns
   useEffect(() => {
     try {
-      console.debug('[SyncManager] connections count:', connections.length, 'names:', connections.map(c => c.name));
+      console.debug('[SyncManager] connections prop count:', connections.length, 'names:', connections.map(c => c.name));
       console.debug('[SyncManager] modal open:', isModalOpen);
     } catch (e) {}
   }, [connections, isModalOpen]);
+
+  // Local copy of connections with a safe localStorage fallback
+  const [localConns, setLocalConns] = useState<Connection[]>(connections || []);
+
+  // Sync prop -> local state and try to load from localStorage if prop is empty
+  useEffect(() => {
+    if (connections && connections.length > 0) {
+      setLocalConns(connections);
+      return;
+    }
+
+    // Try to read saved connections from localStorage (safe, wrapped)
+    try {
+      const userStr = localStorage.getItem('nexus_user');
+      if (userStr) {
+        const user = JSON.parse(userStr);
+        const saved = localStorage.getItem(`nexus_connections_${user.id}`);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setLocalConns(parsed);
+            console.debug('[SyncManager] loaded connections from localStorage', parsed.map((c: any) => c.name));
+            return;
+          }
+        }
+      }
+    } catch (e) {
+      // localStorage may be unavailable in some embedded contexts (Simple Browser)
+      console.debug('[SyncManager] could not read localStorage fallback', e?.message || e);
+    }
+
+    // fallback to empty array
+    setLocalConns([]);
+  }, [connections]);
   
   // Form State
   const [jobName, setJobName] = useState('');
@@ -82,9 +116,9 @@ const SyncManager: React.FC<SyncManagerProps> = ({ connections = [] }) => {
     return () => clearInterval(interval);
   }, [token]);
 
-  // Fallback to look up connection details if connections prop isn't populated yet or for old jobs
-  const getConnectionName = (id: string) => connections.find(c => c.id === id)?.name || 'Desconhecido';
-  const getConnectionType = (id: string) => connections.find(c => c.id === id)?.type || '';
+  // Fallback to look up connection details using localConns
+  const getConnectionName = (id: string) => localConns.find(c => c.id === id)?.name || 'Desconhecido';
+  const getConnectionType = (id: string) => localConns.find(c => c.id === id)?.type || '';
 
   const handleCreateJob = async () => {
     if (!token) return;
@@ -460,7 +494,7 @@ const SyncManager: React.FC<SyncManagerProps> = ({ connections = [] }) => {
                     className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white outline-none"
                   >
                     <option value="">Selecione...</option>
-                    {connections.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    {localConns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                 </div>
                 <div>
@@ -471,7 +505,7 @@ const SyncManager: React.FC<SyncManagerProps> = ({ connections = [] }) => {
                     className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white outline-none"
                    >
                     <option value="">Selecione...</option>
-                    {connections.filter(c => c.id !== sourceId).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    {localConns.filter(c => c.id !== sourceId).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                    </select>
                 </div>
               </div>
