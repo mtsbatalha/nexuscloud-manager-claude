@@ -108,6 +108,13 @@ const AppContent: React.FC = () => {
     }
   }, [connections, currentUser]);
 
+  // Debug: log connections changes to help track why SyncManager receives empty list
+  useEffect(() => {
+    try {
+      console.debug('[App] connections updated:', connections.map(c => ({ id: c.id, name: c.name })), 'currentUser:', currentUser?.id);
+    } catch (e) {}
+  }, [connections, currentUser]);
+
   
   const handleLogin = (data: AuthResponse) => {
     localStorage.setItem('nexus_token', data.token);
